@@ -1,15 +1,15 @@
 import torch
 import torch.nn as nn
+import math
+from torch.nn import functional as F
 
-@dataclass
 # 模型参数
 class model_args:
     block_size: int = 1024
-    # vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
-    # 我这里用
+    vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layer: int = 12
     n_head: int = 12
-    n_embd: int = 768
+    n_embed: int = 768
     dropout: float = 0.0 # 默认不dropout
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
 
@@ -45,7 +45,7 @@ class flash_att(nn.Module):
         self.att_dropout = nn.Dropout(self.dropout)
         # 等价于nn.Dropout(p=self.dropout)
         # projection layer
-        self.proj = nn.Linear(self.n_embed,self.n_embed, bias = args.bias)
+        self.c_proj = nn.Linear(self.n_embed,self.n_embed, bias = args.bias)
 
     def forward(self, x):
         B,T,C = x.shape()
@@ -78,7 +78,7 @@ class MLP(nn.Module):
         super.__init__()
         self.dropout = nn.Dropout(args.dropout)
         self.up_proj = nn.Linear(args.n_embed, 4*args.n_embed, bias = args.bias)
-        self.down_proj = nn.Linear(4*args.n_embed, args.n_embed, bias = args.bias)
+        self.down_c_proj = nn.Linear(4*args.n_embed, args.n_embed, bias = args.bias)
         # 使用relu
         self.act_func = nn.functional.relu
         # 学习llama增加一个门控
@@ -96,7 +96,7 @@ class MLP(nn.Module):
         # 发现这里区别主要在，nanogpt对upproj的x使用激活函数，llama则是对gate使用
 
         x = self.act_func(gate_proj)*x # 和门控gate按照对应位置相乘
-        x = self.down_proj(x)
+        x = self.down_c_proj(x)
         return self.dropout(x)
     
 class Block(nn.Module):
@@ -117,5 +117,78 @@ class GPT(nn.Module):
     def __init__(self,args):
         super().__init__()
         
-        # 我打算是直接使用transformers库的tokenizer和embedding
+        self.transformer = nn.ModuleDict(dict(
+            wte = nn.Embedding(args.vocab_size, args.n_embed),
+            # 获取token_embed
+            wpe = nn.Embedding(args.block_size, args.n_embed),
+            # 使用一组可学习的位置编码pos_embed
+            drop = nn.Dropout(args.dropout),
+            h = nn.ModuleList([Block(args) for i in range(args.n_layer)]),
+            norm = RMS_Norm(args.n_embed)
+        ))
+
+        self.lm_head = nn.Linear(args.n_embed, args.vocab_size,bias=False)
+        self.transformer.wte.weight = self.lm_head.weight
+        # 这里不是简简单单的赋值，而是wte和lm_head共享参数，
+        # 如果只是简单的赋值，后面初始化一下就白费了
         
+        self.apply(self._init_weights) # 初始化权重
+        
+        # 正态分布初始化attention的投影层和MLP的下采样
+        for pname,p in self.named_parameters():
+            n_sum = n_sum + p.numel() # 顺带统计一下参数
+            if pname.endswith('c_proj.weight'):
+                torch.nn.init.normal_(p,mean=0.0, std=0.02/math.sqrt(2*args.n_layer))
+
+        print(f"模型参数量：{n_sum}")
+    
+    def _init_weights(self,module):# 初始化先行层和embedding
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def forward(self, idx, targets = None): # targets是训练时传入的目标，用来计算交叉熵loss
+        device = idx.device
+        B,T = idx.size()
+        pos = torch.arange(0,T,dtype=torch.long,device=device) # 位置
+
+        # embedding
+        token_embed = self.transformer.wte(idx) # (B,T,n_embed)
+        pos_embed = self.transformer.wpe(pos)# (t,n_embed)
+        # 位置embed可学习
+
+        x = self.transformer.drop(token_embed+pos_embed) # 合并token和pos
+        for block in self.transformer.h:
+            x = block(x)
+        x = self.transformer.norm(x)
+
+        # 经过lm_head
+        # target= True 表示模型正在训练阶段，需要回传loss
+        # logits取最后一个（-1）即生成出来的东西，这样和目标的一个token维度相同，才好计算损失
+
+        if targets is not None:
+            logits = self.lm_head(x)
+            # 用-1取最后一维度个，把前面的t丢掉(t,vocab_size)->(vocab_size)
+            loss = F.cross_entropy(logits.view(-1,logits.size(-1)),targets.view(-1),ignore_index=-1) # 交叉熵损失
+        else: # generate时使用
+            logits = self.lm_head(x)
+            loss = None
+
+        return logits,loss
+
+    def configure_optimizers(self,weight_decay,learning_rate,betas,device_type):
+        # 建立一个从参数名到参数的dict
+        param_dict = {pn:p for pn,p in self.named_parameters()}
+        # 再去掉不用计算梯度的部分
+        param_dict = {pn:p for pn,p in param_dict.item() if p.requires_grad }
+
+        # 对二维的参数使用weight decay，其他不用，这样分成两组
+        decay_params = [p for pn,p in param_dict.item() if p.dim() >= 2]
+        nodecay_params = [p for pn,p in param_dict.item() if p.dim() < 2]
+        optim_groups = [
+            {'params': decay_params, 'weight_decay': weight_decay},
+            {'params': nodecay_params, 'weight_decay': 0.0}
+        ]
