@@ -2,10 +2,11 @@ import torch
 import torch.nn as nn
 import math
 from torch.nn import functional as F
+import inspect
 
 # 模型参数
 class model_args:
-    block_size: int = 1024
+    block_size: int = 1024 # 传入的最大大小
     vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layer: int = 12
     n_head: int = 12
@@ -18,7 +19,7 @@ class RMS_Norm(nn.Module):
     def __init__(self,hidden_size,eps=1e-6):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(hidden_size))
-        self._eps = eps
+        self.eps = eps
         # 引入eps避免分母为0
 
     def forward(self,hidden_states):
@@ -114,9 +115,10 @@ class Block(nn.Module):
 
 class GPT(nn.Module):
     # llama和GPT2的缝合怪
-    def __init__(self,args):
+    def __init__(self, args):
         super().__init__()
         
+        self.args = args
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(args.vocab_size, args.n_embed),
             # 获取token_embed
@@ -129,8 +131,9 @@ class GPT(nn.Module):
 
         self.lm_head = nn.Linear(args.n_embed, args.vocab_size,bias=False)
         self.transformer.wte.weight = self.lm_head.weight
-        # 这里不是简简单单的赋值，而是wte和lm_head共享参数，
-        # 如果只是简单的赋值，后面初始化一下就白费了
+        # 这里不是简简单单的赋值，而是wte和lm_head共享参数
+        # lm_head (n_embed,vocab_size)相当于从词向量到token的预测
+        # wte ()
         
         self.apply(self._init_weights) # 初始化权重
         
@@ -185,6 +188,7 @@ class GPT(nn.Module):
         # 再去掉不用计算梯度的部分
         param_dict = {pn:p for pn,p in param_dict.item() if p.requires_grad }
 
+        # weight decay
         # 对二维的参数使用weight decay，其他不用，这样分成两组
         decay_params = [p for pn,p in param_dict.item() if p.dim() >= 2]
         nodecay_params = [p for pn,p in param_dict.item() if p.dim() < 2]
@@ -192,3 +196,44 @@ class GPT(nn.Module):
             {'params': decay_params, 'weight_decay': weight_decay},
             {'params': nodecay_params, 'weight_decay': 0.0}
         ]
+        # 统计一下decay和不decay的参数量
+        num_decay = sum(p.numel() for p in decay_params)
+        num_nodecay = sum(p.numel() for p in nodecay_params)
+        print(f"使用weight decay的参数量为{num_decay},不使用weight decay的参数量为{num_nodecay}")
+
+        # 这段是建立一个AdamW优化器，看版本是否支持fused融合
+        # 判断Adam的参数字典中是否包含fused，如果有，把它添加到extra args中
+        fused_avail = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+        # inspect.signature(fn).parameters返回参数list
+        use_fused = fused_avail and device_type == 'cuda' # 并且要有gpu
+        if use_fused:
+            print("AdamW optimiser use fused!")
+        extra_args = {'fused':True} if use_fused else dict()
+        optimizer = torch.optim.AdamW(optim_groups,lr = learning_rate,betas = betas,**extra_args)
+        # betas:计算梯度以及梯度平方的运行平均值的系数
+        # ** 用于将一个字典解包成关键字参数传递给函数
+        
+        return optimizer
+
+    def generate(self, idx, max_generate_tokens, tempreture=1.0, top_k=None):
+        # topp，topk和tempreture的概念
+        # max_generate_tokens为生成的新tokens的最大数量
+        for _ in range(max_generate_tokens):
+            idx = idx if idx.shape[1] <= self.args.block_size else idx[:,-self.args.block_size:]
+            # 如果大于传入的最大大小则截取后面一段
+            # 其实这里我有点不懂，如果idx长度不足blocksize，是哪一步给他填充到blocksize大小的呢？
+            logits, _ = self(idx)
+            logits = logits[:,-1,:]/tempreture #(B,T,C)取最后一个即新生成的
+            # tempreture更高，生成的随机性更高
+            # 从这里能知道，是softmax的性质决定的，指数函数小的时候变化小，不同token的probs差距会被减少，随机性就强了
+
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf') # 忽略topk名以后的token
+
+            probs = F.softmax(logits,dim=-1)
+            idx_next = torch.multinormial
+            idx_next = torch.multinomial(probs, num_samples=1) # 按照probs概率选一个
+            idx = torch.cat((idx, idx_next), dim=1)
+
+        return idx
