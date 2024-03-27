@@ -5,7 +5,7 @@ from torch.nn import functional as F
 import inspect
 
 # 模型参数
-class model_args:
+class Model_args:
     block_size: int = 1024 # 传入的最大大小
     vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layer: int = 12
@@ -232,7 +232,6 @@ class GPT(nn.Module):
                 logits[logits < v[:, [-1]]] = -float('Inf') # 忽略topk名以后的token
 
             probs = F.softmax(logits,dim=-1)
-            idx_next = torch.multinormial
             idx_next = torch.multinomial(probs, num_samples=1) # 按照probs概率选一个
             idx = torch.cat((idx, idx_next), dim=1)
 
