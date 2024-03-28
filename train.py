@@ -14,10 +14,19 @@ dropout = 0.0
 # 训练参数
 init_from = 'scratch' # 'scratch' or 'resume' # 从头训练还是继续
 checkpoint_save_dir = 'checkpoints'
+eval_iters = 200
 # 优化器参数
+learning_rate = 6e-4
+max_iters = 600000
+weight_decay = 1e-1
+betas = (0.9,0.95)
+grad_clip = 1.0 # 梯度裁剪
 
 # system
 device = 'cuda'
+device_type = 'cuda'
+dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16'
+# 检查cuda是否支持bfloat16数据类型
 
 # dataloader
 data_dir = os.path.join('data')
@@ -45,6 +54,7 @@ assert init_from == 'scratch' or init_from == 'resume'
 if init_from == 'scratch': 
     print("从头训练模型")
     model_args.vocab_size = 50304 # gpt2 tokenizer词表大小
+    # 这里直接使用GPT-2的词表，在prepare.py中，调用tiktoken.get_encoding('gpt2')来tokenize
     gpt_args = Model_args(**model_args)
     model = GPT(gpt_args) # 创建模型
 
@@ -58,9 +68,35 @@ elif init_from == 'resume': # 继续训练
         model_args[k] = checkpoint_model_args[k]
     gpt_args = Model_args(**model_args)
     model = GPT(gpt_args)
-    
+    state_dict = checkpoint['model'] # 模型权重
+    model.load_state_dict(state_dict)
 
+    iter_num = checkpoint['iter_num'] # 迭代器步数
+    best_val_loss = checkpoint['best_val_loss']
 
+scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+# 优化：混合精度训练，大部分使用float16，少部分用float32
 
-# 这里直接使用GPT-2的词表，在prepare.py中，调用tiktoken.get_encoding('gpt2')来tokenize
+optimizer = model.configure_optimizers(weight_decay,learning_rate,betas,device_type)
+if init_from == 'resume':
+    optimizer.load_state_dict(checkpoint['optimizer'])
+checkpoint = None# 这时候checkpoint已经读好了，给他清空一下
+
+# nanogpt还有个torch.compile的优化，我这里暂时先不做了
+
+def estimate_loss():
+    model.eval() # eval不计算梯度
+    for split in ['train','val']:
+        # 这里是训练集和验证集都算一下loss
+        out = {}
+        losses = []
+        # 我发现nanogpt中很多传参都用dict的方式
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            X,Y = get_batch(split)
+            _,loss = model(X,Y) # x,targets
+            losses.append(loss)
+        out[split] = losses.mean()
+    model.train() # 退出时回到train的模式
+    return out
 

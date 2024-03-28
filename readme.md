@@ -16,3 +16,8 @@
 - data/prepare.py使用tiktoken处理input.txt的莎士比亚数据集
 - train.py中读取checkpoint的部分代码，如果是resume的话，从checkpoint['model_args']继承之前训练的参数，从checkpoint['num_iter']读取之前训练到哪里
 - getbatch部分，torch.randint随机从中采样，并且通过torch.stack在0维拼接成batch
+
+## 3-28
+
+- estimate_loss在训练集和测试机上都抽取eval_iter个来计算loss
+- 发现nanogpt中，很多传参都是通过dict的方式传的，如out['train']和out['eval']分别保存训练集和验证集上的loss
