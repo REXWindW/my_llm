@@ -5,6 +5,8 @@ from torch.nn import functional as F
 import inspect
 
 # 模型参数
+from dataclasses import dataclass
+@dataclass
 class Model_args:
     block_size: int = 1024 # 传入的最大大小
     vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
@@ -25,7 +27,7 @@ class RMS_Norm(nn.Module):
     def forward(self,hidden_states):
         input_dtype = hidden_states.dtype
         hidden_states = hidden_states.to(torch.float32)
-        sqrt_pow_mean = torch.sqrt(hidden_states.pow(2).mean(-1, keep_dim = True))
+        sqrt_pow_mean = torch.sqrt(hidden_states.pow(2).mean(-1, keepdim = True))
         # 这里计算L2范式/n后开根，详见RMS Norm的定义
         return self.weight * hidden_states/(sqrt_pow_mean+self.eps)
 
@@ -34,7 +36,7 @@ class flash_att(nn.Module):
     def __init__(self,args):
         super().__init__()
         # qkv合到一个Linear里面去
-        self.qkv_atten = nn.Linear(3*args.n_embed,args.n_embed,bias = args.bias)
+        self.qkv_atten = nn.Linear(args.n_embed,3*args.n_embed,bias = args.bias)
         # 记得有一篇论文说head_size要等于seq_length才合理
         self.n_head = args.n_head
         self.n_embed = args.n_embed
@@ -49,7 +51,7 @@ class flash_att(nn.Module):
         self.c_proj = nn.Linear(self.n_embed,self.n_embed, bias = args.bias)
 
     def forward(self, x):
-        B,T,C = x.shape()
+        B,T,C = x.shape
         # x的尺寸：(B,T,C)
         q, k, v = self.qkv_atten(x).split(self.n_embed,dim = 2) # B,T,C
         
@@ -70,13 +72,13 @@ class flash_att(nn.Module):
         y = y.contiguous().view(B,T,C) # (B,T,C)
         
         # 输出时经过投影层后dropout
-        return self.att_dropout(self.proj(y))
+        return self.att_dropout(self.c_proj(y))
         
 
 class MLP(nn.Module):
     # MLP部分参考llama MLP结构
     def __init__(self,args):
-        super.__init__()
+        super().__init__()
         self.dropout = nn.Dropout(args.dropout)
         self.up_proj = nn.Linear(args.n_embed, 4*args.n_embed, bias = args.bias)
         self.down_c_proj = nn.Linear(4*args.n_embed, args.n_embed, bias = args.bias)
@@ -136,11 +138,11 @@ class GPT(nn.Module):
         # wte ()
         
         self.apply(self._init_weights) # 初始化权重
-        
+        n_sum = 0
         # 正态分布初始化attention的投影层和MLP的下采样
         for pname,p in self.named_parameters():
             n_sum = n_sum + p.numel() # 顺带统计一下参数
-            if pname.endswith('c_proj.weight'):
+            if pname.endswith('c_proj.weight'):# c_proj是上下文感知的投影层
                 torch.nn.init.normal_(p,mean=0.0, std=0.02/math.sqrt(2*args.n_layer))
 
         print(f"模型参数量：{n_sum}")
@@ -186,12 +188,13 @@ class GPT(nn.Module):
         # 建立一个从参数名到参数的dict
         param_dict = {pn:p for pn,p in self.named_parameters()}
         # 再去掉不用计算梯度的部分
-        param_dict = {pn:p for pn,p in param_dict.item() if p.requires_grad }
+        param_dict = {pn:p for pn,p in param_dict.items() if p.requires_grad }
 
         # weight decay
         # 对二维的参数使用weight decay，其他不用，这样分成两组
-        decay_params = [p for pn,p in param_dict.item() if p.dim() >= 2]
-        nodecay_params = [p for pn,p in param_dict.item() if p.dim() < 2]
+        decay_params = [p for pn,p in param_dict.items() if p.dim() >= 2]
+        nodecay_params = [p for pn,p in param_dict.items() if p.dim() < 2]
+        # dict.items()是返回一个key和value元组的list [(k1,v1),(k2,v2)]
         optim_groups = [
             {'params': decay_params, 'weight_decay': weight_decay},
             {'params': nodecay_params, 'weight_decay': 0.0}

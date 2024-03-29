@@ -44,3 +44,30 @@ GradScaler的工作就是在反向传播前给 loss 乘一个 scale factor，
         参数梯度乘 1/scale factor
         利用 FP16 的梯度更新 FP32 的模型参数
 ```
+- 完成train loop代码
+
+
+## 3-30 debug
+- 缺少__init__方法报错
+```
+https://blog.csdn.net/wuShiJingZuo/article/details/134903071
+gpt_args = Model_args(**model_args)
+TypeError: Model_args() takes no arguments
+
+在Model_args声明前增加了一行@dataclass 装饰器自动为该类生成了 __init__、__repr__、__eq__ 等方法
+```
+- dict.items()是返回一个key和value元组的list [(k1,v1),(k2,v2)]
+- optimizer使用fused=True报错，只有在cuda上面的tensor才可以使用fused
+```
+optimizer = model.configure_optimizers(weight_decay,learning_rate,betas,device_type)
+这里报错RuntimeError: `fused=True` requires all the params to be CUDA, floating point Tensor
+我在前面加了一句model.to(device)把model移动到gpu上。nanogpt源码没有这句，不知道怎么跑通的
+```
+- Wqkv三个和一，shape应该是(n_embed,3*n_embed),一开始弄反了
+
+- 算是能够跑通了，之后的任务大概如下
+```
+(1)确定一组合适单卡训练的参数(n_embed,n_layers),确定合适的训练轮次max_iters
+(2)补充sample.py生成的代码
+(3)后续继续追加lora微调等功能的代码
+```
