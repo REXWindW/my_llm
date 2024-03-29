@@ -1,7 +1,10 @@
 import os
 import numpy as np
 import torch
+import torch.nn as nn
+import math
 from model import Model_args,GPT
+import time
 
 # 模型参数
 block_size = 256
@@ -15,18 +18,26 @@ dropout = 0.0
 init_from = 'scratch' # 'scratch' or 'resume' # 从头训练还是继续
 checkpoint_save_dir = 'checkpoints'
 eval_iters = 200
-# 优化器参数
+eval_interval = 2000 # 每2000步eval和保存checkpoint一次
+# 学习率衰减
 learning_rate = 6e-4
+warmup_iters = 2000
+lr_decay_iters = 600000
+min_lr = 6e-5
+# 优化器参数
 max_iters = 600000
 weight_decay = 1e-1
 betas = (0.9,0.95)
 grad_clip = 1.0 # 梯度裁剪
-
 # system
 device = 'cuda'
 device_type = 'cuda'
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16'
 # 检查cuda是否支持bfloat16数据类型
+
+ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
+ctx = torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+# torch.amp.autocast混合精度
 
 # dataloader
 data_dir = os.path.join('data')
@@ -49,6 +60,9 @@ def get_batch(split):
 
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
                   bias=bias, vocab_size=None, dropout=dropout)
+
+iter_num = 0 # resume的话会覆盖掉0
+best_val_loss = 1e9
 
 assert init_from == 'scratch' or init_from == 'resume'
 if init_from == 'scratch': 
@@ -94,9 +108,84 @@ def estimate_loss():
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
             X,Y = get_batch(split)
-            _,loss = model(X,Y) # x,targets
+            with ctx:
+                _,loss = model(X,Y) # x,targets
             losses.append(loss)
         out[split] = losses.mean()
     model.train() # 退出时回到train的模式
     return out
 
+
+# nanogpt使用cos做learning rate的下降
+def get_lr(now_iter):
+    if(now_iter<warmup_iters):#(1)warmup阶段，线性上升
+        return learning_rate*now_iter/warmup_iters
+    elif(now_iter>lr_decay_iters):#(2)超过decay，到min了
+        return min_lr
+    else:# (3)在warmup和decay之间，用cos做lr衰减
+        rate = (now_iter-warmup_iters)/(lr_decay_iters-warmup_iters)
+        # 计算所占比例(0,1)
+        return min_lr + 0.5*(1.0+math.cos(math.pi*rate)) * (learning_rate-min_lr)
+    
+# 训练代码
+X,Y = get_batch('train')
+t_before = time.time()
+
+while(True):
+    lr = get_lr(iter_num)
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr # 设置学习率
+    
+    if iter_num>0 and iter_num % eval_interval == 0:
+        # eval
+        loss_dict = estimate_loss()
+        print(f"当前进行{iter_num}个iter,train_loss:{loss_dict['train']},val_loss{loss_dict['val']}")
+        best_val_loss = min(loss_dict['val'],best_val_loss)
+        # save checkpoint
+        checkpoint = {
+            'model':model.state_dict(),
+            'optimizer':optimizer.state_dict,
+            'model_args': model_args,
+            'iter_num':iter_num,
+            'best_val_loss':best_val_loss
+        }
+        torch.save(checkpoint,os.path.join(checkpoint_save_dir,'checkpoint.pt'))
+        print(f"checkpoint保存在{checkpoint_save_dir}/checkpoint.pt")
+    
+    with ctx:
+        logits,loss = model(X,Y)
+        scaler.scale(loss).backward()
+        # 用scaler，scale loss(FP16)，backward得到scaled的梯度(FP16)
+    if grad_clip >0.0:
+        scaler.unscale_(optimizer) # unscale梯度回fp32
+        nn.utils.clip_grad_norm_(model.parameters(),grad_clip)
+        # 梯度进行裁剪，以防止梯度爆炸
+    scaler.step(optimizer) # 用scaler执行optimizer.step()功能
+    scaler.update() # scaler factor更新
+    """
+    scaler的使用，找到一篇知乎的文章https://zhuanlan.zhihu.com/p/348554267
+    
+    之前用了混合精度，但是把FP32到FP16时可能会溢出，所以需要乘上系数控制范围。
+
+    GradScaler的工作就是在反向传播前给 loss 乘一个 scale factor，
+    之后反向传播得到的梯度都乘了相同的 scale factor。
+    并且为了不影响学习率，在梯度更新前将梯度unscale。
+    步骤如下：
+        维护一个 FP32 数值精度模型的副本
+        在每个iteration
+            拷贝并且转换成 FP16 模型
+            前向传播（FP16 的模型参数）
+            loss 乘 scale factor
+            反向传播（FP16 的模型参数和参数梯度）
+            参数梯度乘 1/scale factor
+            利用 FP16 的梯度更新 FP32 的模型参数
+    """
+    optimizer.zero_grad(set_to_none=True) # 释放内存
+
+    t_after = time.time()
+    dt = t_after-t_before
+    t_before = t_after
+
+    iter_num += 1
+    if iter_num > max_iters:
+        break
