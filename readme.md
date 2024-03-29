@@ -1,28 +1,54 @@
-# 项目日志
+# 单卡训练的LLM
 
-## 3-24
+## reference
+- [NanoGPT](https://github.com/karpathy/nanoGPT/tree/master)
+- [Llama](https://github.com/meta-llama/llama)
+
+## introduction
+
+- 主要是为了自己当前阶段学习的内容做一个实践
+- 代码主要参考nanogpt的基础上做的小修改，并且减少了很多功能，基本只留下了最基础的模型结构和训练代码
+- 后续打算把自己新学到的都在上面应用一下，比如lora微调
+
+## requirements
+
+```
+pytorch==2.0以上版本
+numpy
+```
+
+## 使用方法
+
+- 目前只支持n卡训练不支持cpu，不支持DDP
+- 参照data/shakespare中的形式准备好input.txt,运行prepare.py处理出train.bin和val.bin
+- 修改train.py中的dataset_path为数据集路径
+- 根据自己的显存占用修改一下batch_size,n_embed和n_layers等参数
+
+## 项目日志
+
+### 3-24
 
 - 完成模型结构
 - 在MLP部分做了修改，增加一层门控
 - 使用RMS-Norm，有说法是RMS-Norm好在不改变词向量方向
 
-## 3-26
+### 3-26
 
 - 完成optimizer，generate函数
 
-## 3-27
+### 3-27
 
 - tiktoken用法[ChatGPT丨使用tiktoken计算tokens - 知乎 (zhihu.com)](https://zhuanlan.zhihu.com/p/629776230)
 - data/prepare.py使用tiktoken处理input.txt的莎士比亚数据集
 - train.py中读取checkpoint的部分代码，如果是resume的话，从checkpoint['model_args']继承之前训练的参数，从checkpoint['num_iter']读取之前训练到哪里
 - getbatch部分，torch.randint随机从中采样，并且通过torch.stack在0维拼接成batch
 
-## 3-28
+### 3-28
 
 - estimate_loss在训练集和测试机上都抽取eval_iter个来计算loss
 - 发现nanogpt中，很多传参都是通过dict的方式传的，如out['train']和out['eval']分别保存训练集和验证集上的loss
 
-## 3-29
+### 3-29
 
 - 写了get_lr，线性warmup，然后用cos来做学习率衰减，直到min_lr停止衰减
 - 混合精度训练，torch.amp.autocast混合精度，配合torch.cuda.amp.GradScaler对梯度进行缩放
@@ -47,7 +73,7 @@ GradScaler的工作就是在反向传播前给 loss 乘一个 scale factor，
 - 完成train loop代码
 
 
-## 3-30 debug
+### 3-30 debug
 - 缺少__init__方法报错
 ```
 https://blog.csdn.net/wuShiJingZuo/article/details/134903071
