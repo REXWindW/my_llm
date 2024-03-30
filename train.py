@@ -7,25 +7,25 @@ from model import Model_args,GPT
 import time
 
 # 模型参数
-block_size = 256
+block_size = 128
 batch_size = 2 # 暂定，之后再看显存占用
-n_layer = 6
+n_layer = 5
 n_head = 6
 n_embed = 384
 bias = False
 dropout = 0.0
 dataset_path = './data/shakespare'
 init_from = 'scratch' # 'scratch' or 'resume' # 从头训练还是继续
-checkpoint_save_dir = 'checkpoints'
+checkpoint_save_dir = './checkpoints'
 eval_iters = 200
-eval_interval = 2000 # 每n步eval和保存checkpoint一次
+eval_interval = 500 # 每n步eval和保存checkpoint一次
 # 学习率衰减
 learning_rate = 6e-4
 warmup_iters = 2000
-lr_decay_iters = 600000
+lr_decay_iters = 8000
 min_lr = 6e-5
 # 优化器参数
-max_iters = 600000
+max_iters = 10000
 weight_decay = 1e-1
 betas = (0.9,0.95)
 grad_clip = 1.0 # 梯度裁剪
@@ -103,17 +103,17 @@ checkpoint = None# 这时候checkpoint已经读好了，给他清空一下
 
 def estimate_loss():
     model.eval() # eval不计算梯度
+    out = {}
     for split in ['train','val']:
         # 这里是训练集和验证集都算一下loss
-        out = {}
-        losses = []
         # 我发现nanogpt中很多传参都用dict的方式
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
+            # print(f"now_eval in {k}")
             X,Y = get_batch(split)
             with ctx:
                 _,loss = model(X,Y) # x,targets
-            losses.append(loss)
+            losses[k] = loss.item()
         out[split] = losses.mean()
     model.train() # 退出时回到train的模式
     return out
@@ -136,7 +136,6 @@ t_before = time.time()
 
 while(True):
     lr = get_lr(iter_num)
-    print(f"iter:{iter_num},learning_rate:{lr}")
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr # 设置学习率
     
@@ -158,6 +157,7 @@ while(True):
     
     with ctx:
         logits,loss = model(X,Y)
+        print(f"iter:{iter_num},loss:{loss.item()}")
         scaler.scale(loss).backward()
         # 用scaler，scale loss(FP16)，backward得到scaled的梯度(FP16)
     if grad_clip >0.0:

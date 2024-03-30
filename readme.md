@@ -91,7 +91,16 @@ optimizer = model.configure_optimizers(weight_decay,learning_rate,betas,device_t
 ```
 - Wqkv三个和一，shape应该是(n_embed,3*n_embed),一开始弄反了
 
-- 算是能够跑通了，之后的任务大概如下
+### 3-31 debug
+- 之前显存占用都很低，执行estimate_loss()时爆显存了
+```
+报错位置:
+losses = torch.zeros(eval_iters)
+......省略......
+losses[k] = loss
+应该改成losses[k] = loss.item()省去没必要的梯度信息
+```
+- 算是能够跑通train了，之后的任务大概如下
 ```
 (1)确定一组合适单卡训练的参数(n_embed,n_layers),确定合适的训练轮次max_iters
 (2)补充sample.py生成的代码
