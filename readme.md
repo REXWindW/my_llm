@@ -15,6 +15,7 @@
 ```
 pytorch==2.0以上版本
 numpy
+tiktoken
 ```
 
 ## 使用方法
@@ -74,6 +75,7 @@ GradScaler的工作就是在反向传播前给 loss 乘一个 scale factor，
 
 
 ### 3-30 debug
+
 - 缺少__init__方法报错
 ```
 https://blog.csdn.net/wuShiJingZuo/article/details/134903071
@@ -92,6 +94,7 @@ optimizer = model.configure_optimizers(weight_decay,learning_rate,betas,device_t
 - Wqkv三个和一，shape应该是(n_embed,3*n_embed),一开始弄反了
 
 ### 3-31 debug
+
 - 之前显存占用都很低，执行estimate_loss()时爆显存了
 ```
 报错位置:
@@ -108,6 +111,7 @@ losses[k] = loss
 ```
 
 ### 4-1 sample.py
+
 - 在定义encoder的时候，设置了allowed_special参数
 ```
 encode = lambda x:enc.encode(x,allowed_special={"<|endoftext|>"}) 
