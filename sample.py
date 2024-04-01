@@ -12,7 +12,7 @@ ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torc
 # generate参数
 top_k = 200
 tempreture = 0.8 # 一般都先设置1，想要更random一点就往上调
-start = "We got off," # 这是最开始的输入
+start = "吴邪" # 这是最开始的输入
 num_samples = 1 # sample几次
 max_new_tokens = 128
 

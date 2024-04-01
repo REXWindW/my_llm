@@ -8,13 +8,13 @@ import time
 
 # 模型参数
 block_size = 128 # 窗口大小
-batch_size = 5 # 暂定，之后再看显存占用
-n_layer = 10
+batch_size = 10 # 暂定，之后再看显存占用
+n_layer = 12
 n_head = 6
 n_embed = 768
 bias = False
 dropout = 0.0
-dataset_path = './data/sherlock'
+dataset_path = './data/dmbj'
 init_from = 'scratch' # 'scratch' or 'resume' # 从头训练还是继续
 checkpoint_save_dir = './checkpoints'
 eval_iters = 200
