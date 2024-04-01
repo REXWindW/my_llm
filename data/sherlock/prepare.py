@@ -6,7 +6,6 @@ import numpy as np
 # openai tokenizer的库，tiktoken
 # 使用方法 https://zhuanlan.zhihu.com/p/629776230
 
-# download the tiny shakespeare dataset
 input_file_path = os.path.join(os.path.dirname(__file__), 'sherlock.txt')
 
 with open(input_file_path, 'r', encoding='utf-8') as f:

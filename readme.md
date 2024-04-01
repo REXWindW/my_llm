@@ -106,3 +106,30 @@ losses[k] = loss
 (2)补充sample.py生成的代码
 (3)后续继续追加lora微调等功能的代码
 ```
+
+### 4-1 sample.py
+- 在定义encoder的时候，设置了allowed_special参数
+```
+encode = lambda x:enc.encode(x,allowed_special={"<|endoftext|>"}) 
+表示文本结束的特殊token，在tokenization后由开发者手动加入
+在千问的文档里有个解释https://github.com/QwenLM/Qwen/blob/main/tokenization_note_zh.md
+如果不加这段，<|endoftext|>会被分开tokenize成
+ids:[1350, 9639, 91, 8691, 723, 427, 91, 82598]
+tokens: [b'print', b'("<', b'|', b'endo', b'ft', b'ext', b'|', b'>")']
+我们希望的情况是
+ids: [1350, 445, 151643, 899]
+tokens: [b'print', b'("', '<|endoftext|>', b'")']
+```
+- 占用4G显存，训练了6000轮
+```
+block_size = 128
+n_layer = 10
+n_head = 6
+n_embed = 768
+效果很差，而且有一个问题是，他会一直重复生成同一个单词好几次，就像这样
+“Your sister asked asked asked at my flight.”
+” he remarked.
+“It looks newer have some through on German your?”
+“No, it.”
+“No,”
+```

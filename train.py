@@ -7,25 +7,25 @@ from model import Model_args,GPT
 import time
 
 # 模型参数
-block_size = 128
-batch_size = 2 # 暂定，之后再看显存占用
-n_layer = 5
+block_size = 128 # 窗口大小
+batch_size = 5 # 暂定，之后再看显存占用
+n_layer = 10
 n_head = 6
-n_embed = 384
+n_embed = 768
 bias = False
 dropout = 0.0
-dataset_path = './data/shakespare'
+dataset_path = './data/sherlock'
 init_from = 'scratch' # 'scratch' or 'resume' # 从头训练还是继续
 checkpoint_save_dir = './checkpoints'
 eval_iters = 200
-eval_interval = 500 # 每n步eval和保存checkpoint一次
+eval_interval = 2000 # 每n步eval和保存checkpoint一次
 # 学习率衰减
 learning_rate = 6e-4
 warmup_iters = 2000
 lr_decay_iters = 8000
 min_lr = 6e-5
 # 优化器参数
-max_iters = 10000
+max_iters = 6000 # 训练多少个iter
 weight_decay = 1e-1
 betas = (0.9,0.95)
 grad_clip = 1.0 # 梯度裁剪
